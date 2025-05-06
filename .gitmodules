@@ -1,0 +1,3 @@
+[submodule "visloc-estimation"]
+	path = visloc-estimation
+	url = git@github.com:sarco3t/visloc-estimation.git
