@@ -23,7 +23,8 @@ var GEOEST_TEMPLATE = template.Must(template.New("response").Parse(`Prediction:
 
 var (
 	// TeleToken bot
-	TeleToken = os.Getenv("TELE_TOKEN")
+	TeleToken  = os.Getenv("TELE_TOKEN")
+	GEOEST_URL = os.Getenv("GEOEST_URL")
 )
 
 // kbotCmd represents the kbot command
@@ -88,7 +89,7 @@ func handlePhoto(m telebot.Context) error {
 	photo := m.Message().Photo
 
 	// Create a geoestimation client
-	client := geoestclient.NewClient("http://localhost:8000")
+	client := geoestclient.NewClient(GEOEST_URL)
 
 	reader, err := m.Bot().File(&photo.File)
 	if err != nil {
