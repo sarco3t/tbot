@@ -4,36 +4,34 @@ Copyright © 2025 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
+	"text/template"
 	"time"
 
+	geoestclient "github.com/sarco3t/kbot/geoest_client"
 	"github.com/spf13/cobra"
 	"gopkg.in/telebot.v4"
 )
+
+var GEOEST_TEMPLATE = template.Must(template.New("response").Parse(`Prediction:
+  Latitude: {{printf "%.4f" .Prediction.Latitude}}
+  Longitude: {{printf "%.4f" .Prediction.Longitude}}
+  Confidence: {{printf "%.2f" .Confidence}}%`))
 
 var (
 	// TeleToken bot
 	TeleToken = os.Getenv("TELE_TOKEN")
 )
 
-type TrafficSignal struct {
-	Pin int8
-	On  bool
-}
-
 // kbotCmd represents the kbot command
 var kbotCmd = &cobra.Command{
 	Use:     "kbot",
 	Aliases: []string{"start"},
-	Short:   "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+	Short:   "Start the Kbot Telegram bot",
+	Long:    "Kbot is a Telegram bot for geo estimation using photos.",
 	Run: func(cmd *cobra.Command, args []string) {
 		if TeleToken == "" {
 			log.Fatal("TELE_TOKEN environment variable is not set")
@@ -41,61 +39,86 @@ to quickly create a Cobra application.`,
 
 		fmt.Printf("kbot %s started\n", appVersion)
 
-		kbot, err := telebot.NewBot(telebot.Settings{
-			URL:    "",
-			Token:  TeleToken,
-			Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
-		})
-
-		if err != nil {
-			log.Fatalf("Please check TELE_TOKEN env variable. %s", err)
+		// Initialize and start the bot
+		if err := startBot(); err != nil {
+			log.Fatalf("Failed to start bot: %s", err)
 		}
-
-		// Initialize traffic signals
-		trafficSignals := map[string]*TrafficSignal{
-			"red":   {Pin: 12, On: false},
-			"amber": {Pin: 27, On: false},
-			"green": {Pin: 22, On: false},
-		}
-
-		kbot.Handle(telebot.OnText, func(m telebot.Context) error {
-			log.Printf("Received message: %s", m.Text())
-			payload := m.Message().Payload
-
-			switch payload {
-			case "hello":
-				return m.Send(fmt.Sprintf("Hello I'm Kbot %s!", appVersion))
-
-			case "red", "amber", "green":
-				signal := trafficSignals[payload]
-
-				if !signal.On {
-					signal.On = true
-				} else {
-					signal.On = false
-				}
-
-				return m.Send(fmt.Sprintf("Switched %s light %s", payload, map[bool]string{true: "on", false: "off"}[signal.On]))
-
-			default:
-				return m.Send("Usage: /s red|amber|green")
-			}
-		})
-
-		kbot.Start()
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(kbotCmd)
+}
 
-	// Here you will define your flags and configuration settings.
+// startBot initializes and starts the Telegram bot
+func startBot() error {
+	kbot, err := telebot.NewBot(telebot.Settings{
+		URL:    "",
+		Token:  TeleToken,
+		Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create bot: %w", err)
+	}
 
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// kbotCmd.PersistentFlags().String("foo", "", "A help for foo")
+	// Handle text messages
+	kbot.Handle(telebot.OnText, handleText)
 
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// kbotCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	// Handle photo messages
+	kbot.Handle(telebot.OnPhoto, handlePhoto)
+
+	kbot.Start()
+	return nil
+}
+
+// handleText processes text messages
+func handleText(m telebot.Context) error {
+	log.Printf("Received message: %s", m.Text())
+	payload := m.Message().Payload
+	switch payload {
+	case "hello":
+		return m.Send(fmt.Sprintf("Hello, I'm Kbot %s!", appVersion))
+	default:
+		return m.Send("Usage: Send a photo for geo estimation.\n\n")
+	}
+}
+
+// handlePhoto processes photo messages
+func handlePhoto(m telebot.Context) error {
+	photo := m.Message().Photo
+
+	// Create a geoestimation client
+	client := geoestclient.NewClient("http://localhost:8000")
+
+	reader, err := m.Bot().File(&photo.File)
+	if err != nil {
+		log.Printf("Error getting file: %s", err)
+		return m.Reply("Failed to retrieve the photo. Please try again.")
+	}
+	// Evaluate the photo
+	response, err := client.Evaluate(reader)
+	if err != nil {
+		log.Printf("Error evaluating photo: %s", err)
+		return m.Reply("Failed to process the photo. Please try again.")
+	}
+
+	// Format the response using the template
+	responseText, err := formatResponse(response)
+	if err != nil {
+		log.Printf("Error formatting response: %s", err)
+		return m.Reply("Failed to format the response. Please try again.")
+	}
+
+	// Send the response
+	return m.Reply(responseText)
+}
+
+// formatResponse formats the geo estimation response using a template
+func formatResponse(response *geoestclient.UploadResponse) (string, error) {
+	var responseText bytes.Buffer
+	err := GEOEST_TEMPLATE.Execute(&responseText, response)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute template: %w", err)
+	}
+	return responseText.String(), nil
 }
